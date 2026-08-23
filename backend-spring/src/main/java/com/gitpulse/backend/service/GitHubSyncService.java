@@ -18,6 +18,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Service responsible for synchronizing GitHub telemetry into PostgreSQL / H2 database.
@@ -146,6 +147,23 @@ public class GitHubSyncService {
     @Transactional
     public void syncAllData(String token, String username) {
         log.info("Starting complete telemetry synchronization for user: '{}'", username);
+
+        boolean isRealToken = token != null && !token.isBlank();
+        if (isRealToken) {
+            // Clean up any lingering demo mock repositories
+            List<RepositorySummary> mockRepos = repoRepository.findAll().stream()
+                    .filter(r -> "octocat-enterprise".equalsIgnoreCase(r.getOwner()) || (username != null && !username.equalsIgnoreCase(r.getOwner())))
+                    .collect(Collectors.toList());
+            if (!mockRepos.isEmpty()) {
+                log.info("Removing {} legacy/mock repository records before real synchronization", mockRepos.size());
+                for (RepositorySummary mr : mockRepos) {
+                    trafficRepository.deleteAll(trafficRepository.findByRepositoryOrderByDateAsc(mr));
+                    workflowRepository.deleteAll(workflowRepository.findByRepositoryOrderByCreatedAtDesc(mr));
+                    prRepository.deleteAll(prRepository.findByRepositoryOrderByCreatedAtDesc(mr));
+                    repoRepository.delete(mr);
+                }
+            }
+        }
 
         List<Map<String, Object>> repoMaps = gitHubClientService.fetchUserRepositories(token, username);
         log.info("Discovered {} repositories from GitHub API", repoMaps.size());

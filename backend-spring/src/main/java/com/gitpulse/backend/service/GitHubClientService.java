@@ -107,6 +107,7 @@ public class GitHubClientService {
 
     /**
      * Fetches 14-day traffic (views & clones) for a repository.
+     * When authenticated, strictly returns genuine GitHub telemetry or empty records if none exist.
      */
     public Map<String, Object> fetchRepositoryTraffic(String token, String owner, String repoName) {
         if (token == null || token.isBlank()) {
@@ -115,7 +116,7 @@ public class GitHubClientService {
 
         Map<String, Object> result = new HashMap<>();
         try {
-            log.info("Fetching traffic analytics for repository: {}/{}", owner, repoName);
+            log.info("Fetching real traffic analytics from GitHub for {}/{}", owner, repoName);
             Map<String, Object> views = restClient.get()
                     .uri(apiBaseUrl + "/repos/" + owner + "/" + repoName + "/traffic/views")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token.trim())
@@ -128,12 +129,14 @@ public class GitHubClientService {
                     .retrieve()
                     .body(new ParameterizedTypeReference<Map<String, Object>>() {});
 
-            result.put("views", views);
-            result.put("clones", clones);
+            result.put("views", views != null ? views : Map.of("count", 0, "uniques", 0, "views", List.of()));
+            result.put("clones", clones != null ? clones : Map.of("count", 0, "uniques", 0, "clones", List.of()));
             return result;
         } catch (Exception ex) {
-            log.warn("Could not fetch real traffic for {}/{}: {}. Providing generated realistic metrics.", owner, repoName, ex.getMessage());
-            return generateMockTraffic(owner, repoName);
+            log.info("No external traffic recorded yet for {}/{}: {}", owner, repoName, ex.getMessage());
+            result.put("views", Map.of("count", 0, "uniques", 0, "views", List.of()));
+            result.put("clones", Map.of("count", 0, "uniques", 0, "clones", List.of()));
+            return result;
         }
     }
 
@@ -146,7 +149,7 @@ public class GitHubClientService {
         }
 
         try {
-            log.info("Fetching workflow runs for repository: {}/{}", owner, repoName);
+            log.info("Fetching real workflow runs from GitHub for {}/{}", owner, repoName);
             Map<String, Object> response = restClient.get()
                     .uri(apiBaseUrl + "/repos/" + owner + "/" + repoName + "/actions/runs?per_page=15")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token.trim())
@@ -156,14 +159,14 @@ public class GitHubClientService {
             if (response != null && response.containsKey("workflow_runs")) {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> runs = (List<Map<String, Object>>) response.get("workflow_runs");
-                if (runs != null && !runs.isEmpty()) {
+                if (runs != null) {
                     return runs;
                 }
             }
-            return generateMockWorkflowRuns(owner, repoName);
+            return Collections.emptyList();
         } catch (Exception ex) {
-            log.warn("Workflow runs unavailable for {}/{}: {}. Falling back to mock runs.", owner, repoName, ex.getMessage());
-            return generateMockWorkflowRuns(owner, repoName);
+            log.info("No workflow runs found for {}/{}: {}", owner, repoName, ex.getMessage());
+            return Collections.emptyList();
         }
     }
 
@@ -176,20 +179,17 @@ public class GitHubClientService {
         }
 
         try {
-            log.info("Fetching pull requests for repository: {}/{}", owner, repoName);
+            log.info("Fetching real pull requests from GitHub for {}/{}", owner, repoName);
             List<Map<String, Object>> prs = restClient.get()
                     .uri(apiBaseUrl + "/repos/" + owner + "/" + repoName + "/pulls?state=all&per_page=15")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token.trim())
                     .retrieve()
                     .body(new ParameterizedTypeReference<List<Map<String, Object>>>() {});
 
-            if (prs != null && !prs.isEmpty()) {
-                return prs;
-            }
-            return generateMockPullRequests(owner, repoName);
+            return prs != null ? prs : Collections.emptyList();
         } catch (Exception ex) {
-            log.warn("Pull requests unavailable for {}/{}: {}. Falling back to mock PRs.", owner, repoName, ex.getMessage());
-            return generateMockPullRequests(owner, repoName);
+            log.info("No pull requests found for {}/{}: {}", owner, repoName, ex.getMessage());
+            return Collections.emptyList();
         }
     }
 
@@ -217,7 +217,7 @@ public class GitHubClientService {
     }
 
     /**
-     * Detects locally configured GitHub CLI token via environment or 'gh auth token'.
+     * Detects locally configured GitHub CLI token via environment or 'gh auth token' across Windows/Linux/macOS.
      */
     public Optional<String> detectCliAuthToken() {
         String envToken = System.getenv("GITHUB_TOKEN");
@@ -227,16 +227,23 @@ public class GitHubClientService {
         }
 
         try {
-            Process process = new ProcessBuilder("gh", "auth", "token").start();
+            boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
+            ProcessBuilder pb = isWindows
+                    ? new ProcessBuilder("cmd.exe", "/c", "gh auth token")
+                    : new ProcessBuilder("gh", "auth", "token");
+            Process process = pb.start();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line = reader.readLine();
                 if (line != null && !line.isBlank()) {
-                    log.info("Detected active GitHub token from GitHub CLI (gh auth token)");
-                    return Optional.of(line.trim());
+                    String token = line.trim();
+                    if (token.startsWith("gho_") || token.startsWith("ghp_") || token.startsWith("github_pat_")) {
+                        log.info("Successfully detected active GitHub token from local CLI");
+                        return Optional.of(token);
+                    }
                 }
             }
         } catch (Exception ex) {
-            log.debug("GitHub CLI not installed or not authenticated: {}", ex.getMessage());
+            log.warn("GitHub CLI token discovery error: {}", ex.getMessage());
         }
         return Optional.empty();
     }
