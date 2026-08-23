@@ -1,0 +1,94 @@
+version: '3.8'
+
+# ==============================================================================
+# GitPulse Multi-Service Docker Compose Orchestration
+# ==============================================================================
+# Services:
+#   1. postgres: PostgreSQL 16 Alpine database with healthcheck
+#   2. backend-spring: Java Spring Boot 3.2 backend on port 8080
+#   3. frontend: React 18 + Vite + Nginx production web server on port 3000
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # PostgreSQL Database Service
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: gitpulse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gitpulse_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gitpulse_dev_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-gitpulse_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-gitpulse_user} -d $${POSTGRES_DB:-gitpulse_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - gitpulse-network
+
+  # ----------------------------------------------------------------------------
+  # Java Spring Boot 3.2 Backend Service
+  # ----------------------------------------------------------------------------
+  backend-spring:
+    build:
+      context: ./backend-spring
+      dockerfile: Dockerfile
+    container_name: gitpulse-backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-gitpulse_db}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-gitpulse_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-gitpulse_dev_secret}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || wget -qO- http://localhost:8080/api/health || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - gitpulse-network
+
+  # ----------------------------------------------------------------------------
+  # React 18 Vite + Nginx Frontend Service
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gitpulse-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend-spring:
+        condition: service_started
+    networks:
+      - gitpulse-network
+
+# ------------------------------------------------------------------------------
+# Persistent Volumes & Networks
+# ------------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    name: gitpulse_postgres_data
+
+networks:
+  gitpulse-network:
+    name: gitpulse_network
+    driver: bridge
