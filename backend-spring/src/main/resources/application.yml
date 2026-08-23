@@ -1,0 +1,33 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: gitpulse-backend
+  profiles:
+    # Default active profile is h2 for instant out-of-the-box development and testing.
+    # Set SPRING_PROFILES_ACTIVE=postgres in production or Docker deployments.
+    active: ${SPRING_PROFILES_ACTIVE:h2}
+  jpa:
+    open-in-view: false
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+# GitHub Integration Configuration
+gitpulse:
+  github:
+    api-base-url: "https://api.github.com"
+    default-owner: "torvalds" # fallback default owner for demo sync
+    sync-interval-seconds: 300
+    mock-fallback-enabled: true
+
+# Logging Configuration for Verbose Debuggability
+logging:
+  level:
+    root: INFO
+    com.gitpulse.backend: DEBUG
+    org.hibernate.SQL: WARN
